@@ -104,3 +104,74 @@
   * What other requests did they make around the same time?
 - Rate-limiting
   * A rate-limiter can either completely close connections when the limit is exceeded or else slow down the processing of requests, a process known as throttling.
+  
+
+## Secure API development
+
+### Setup
+- Java 11
+- Spark Java: http://sparkjava.com
+- H2 in-memory database: https://h2database.com
+- Dalesbred database abstraction library: https://dalesbred.org
+
+### Initialize Database
+- Two entities: 
+  * spaces
+    * space_id
+    * name
+    * owner 
+  * messages
+    * msg_id
+    * author
+    * msg_time
+    * msg_txt
+    * space_id
+
+### Trying it out
+> mvn clean compile exec:java
+
+>  curl -i -d '{"name": "test space", "owner": "demo"}' http://localhost:4567/spaces
+
+
+### Injection attacks
+#### Preventing Injection Attacks
+- The best approach is to ensure that user input is always clearly separated from dynamic code by using APIs that support prepared statements.
+#### Mitigating SQL injection with permissions
+- While prepared statements should be your number one defense against SQL injection attacks, another aspect of the attack worth mentioning is that the database user didn’t need to have permissions to delete tables in the first place.
+- The **principle of least authority** says that you should only grant users and processes the fewest permissions that they need to get their job done and no more.
+
+### Input validation
+### Producing safe output
+#### XSS: Cross Site Scripting
+> To appreciate why XSS is such a risk, you need to understand that the security model of web browsers is based on the same-origin policy (SOP). Scripts executing within the same origin (or same site) as a web page are, by default, able to read cookies set by that website, examine HTML elements created by that site, make network requests to that site, and so on, although scripts from other origins are blocked from doing those things.
+
+> A successful XSS allows an attacker to execute their script as if it came from the target origin, so the malicious script gets to do all the same things that the genuine scripts from that origin can do.
+
+#### Exploiting XSS Attacks
+```
+afterAfter((request, response) -> {
+      response.header("X-XSS-Protection", "0");
+});
+```
+
+- The X-XSS-Protection header is usually used to ensure browser protections are turned on, but in this case, you’ll turn them off temporarily to allow the bug to be exploited.
+
+#### Preventing XSS
+- There are some standard security headers that you can add to all API responses to add additional protection for web browser clients
+
+|Security header|Description|Comments|
+|---------------|-----------|--------|
+|X-XSS-Protection|Tells the browser whether to block/ignore suspected XSS attacks.|The current guidance is to set to “0” on API responses to completely disable these protections due to security issues they can introduce.|
+|X-Content-Type-Options|Set to nosniff to pre- vent the browser guess- ing the correct Content- Type.|Without this header, the browser may ignore your Content-Type header and guess (sniff) what the content really is. This can cause JSON output to be interpreted as HTML or JavaScript, so always add this header.|
+|X-Frame-Options|Set to DENY to prevent your API responses being loaded in a frame or iframe.|In an attack known as drag ‘n’ drop clickjacking, the attacker loads a JSON response into a hidden iframe and tricks a user into dragging the data into a frame controlled by the attacker, potentially revealing sensitive information. This header pre- vents this attack in older browsers but has been replaced by Content Security Policy in newer browsers (see below). It is worth setting both headers for now.|
+|Cache-Control and Expires|Controls whether brows- ers and proxies can cache content in the response and for how long.|These headers should always be set correctly to avoid sensitive data being retained in the browser or network caches. It can be useful to set default cache headers in a before() filter, to allow spe- cific endpoints to override it if they have more specific caching requirements. The safest default is to disable caching completely using the no-store directive and then selectively re-enable caching for individual requests if necessary. The Pragma: no-cache header can be used to disable caching for older HTTP/1.0 caches.|
+|Content-Security-Policy|Reduce the scope for XSS attacks by restricting where scripts can be loaded from and what they can do.||
+
+- Recommended CSP directives for REST responses
+
+|Security Header|Value|Comments|
+|---------------|-----|--------|
+|default-src|'none'|Prevents the response from loading any scripts or resources.|
+|frame-ancestors|'none'|A replacement for X-Frame-Options, this prevents the response being loaded into an iframe.|
+|sandbox|n/a|Disables scripts and other potentially dangerous content from being executed.|
+
