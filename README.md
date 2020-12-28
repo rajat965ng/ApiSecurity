@@ -179,7 +179,21 @@ afterAfter((request, response) -> {
 
 ### Addressing threats with security controls
 #### Encryption
-- TBD
+- First, you need to generate a certificate that the API will use to authenticate itself to its clients.
+- When a client connects to your API it will use a URI that includes the hostname of the server the API is running on, for example api .example.com. The server must present a certificate, signed by a trusted certificate authority (CA), that says that it really is the server for api.example.com. If an invalid certificate is presented, or it doesn’t match the host that the client wanted to connect to, then the client will abort the connection. Without this step, the client might be tricked into connecting to the wrong server and then send its password or other confidential data to the imposter.
+- A tool called mkcert (https://mkcert.dev) simplifies the process considerably.
+  ```
+    mkcert -install
+  ``` 
+- A self-signed certificate is a certificate that has been signed using the private key associated with that same certificate, rather than by a trusted certificate authority.
+- By default, mkcert generates certificates in Privacy Enhanced Mail (PEM) format. For Java, you need the certificate in PKCS#12 format, so run the following command in the root folder of the project to generate a certificate for localhost.
+  ```
+    mkcert -pkcs12 localhost
+  ```
+- Enable HTTPS support in Spark by adding a call to the secure() static method.
+  ```
+  curl -v --cacert "$(mkcert -CAROOT)/rootCA.pem" -d '{"username":"demo","password":"password"}' -H 'Content-Type: application/json' https://localhost:4567/users
+  ```
 #### Rate Limiting
 - In a DNS amplification attack, the attacker sends the same DNS query to many DNS servers, spoofing their IP address to look like the request came from the victim. By carefully choosing the DNS query, the server can be tricked into replying with much more data than was in the original query, flooding the victim with traffic.
 - Application layer DoS attacks attempt to overwhelm an API by sending valid requests, but at much higher rates than a normal client. 

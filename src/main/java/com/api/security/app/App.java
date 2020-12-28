@@ -7,15 +7,18 @@ import org.dalesbred.Database;
 import org.h2.jdbcx.JdbcConnectionPool;
 import org.json.JSONObject;
 
-import static spark.Spark.*;
-
 import java.nio.file.Files;
 import java.nio.file.Paths;
+
+import static spark.Spark.*;
 
 
 public class App {
 
     public static void main( String[] args ) throws Exception {
+
+        secure("localhost.p12","changeit",null,null);
+
         var datasource = JdbcConnectionPool.create("jdbc:h2:mem:natter","natter_api_user","password");
         var database = Database.forDataSource(datasource);
         var path = Paths.get(App.class.getResource("/schema.sql").toURI());
@@ -28,7 +31,6 @@ public class App {
                 halt(429);
             }
         }));
-
 
         var spaceController = new SpaceController(database);
         post("/spaces",spaceController::createSpace);
@@ -54,6 +56,7 @@ public class App {
 
         internalServerError(new JSONObject().put("error","internal server error").toString());
         notFound(new JSONObject().put("error","not found").toString());
+
 
     }
 
