@@ -223,9 +223,9 @@ afterAfter((request, response) -> {
   * This may seem an excessive amount of time and memory, but these parameters have been carefully chosen based on the speed at which attackers can guess passwords. Dedicated password cracking machines, which can be built for relatively modest amounts of money, can try many millions or even billions of passwords per second. The expensive time and memory requirements of secure password hashing algorithms such as Scrypt reduce this to a few thousand passwords per second, hugely increasing the cost for the attacker and giving users valuable time to change their passwords after a breach is discovered.
   * The Scrypt library generates a unique random salt value for each password hash. The hash string that gets stored in the database includes the parameters that were used when the hash was generated, as well as this random salt value. This ensures that you can always recreate the same hash in future, even if you change the parameters.
     ```
-    curl -d '{"name":"test space","owner":"demo"}' -H 'Content-Type: application/json' http://localhost:4567/spaces
-    curl -d '{"username":"demo","password":"password"}' -H 'Content-Type: application/json' http://localhost:4567/users
-    curl -u demo:password -d '{"name":"test space","owner":"demo"}' -H 'Content-Type: application/json' http://localhost:4567/spaces
+    curl -v -d '{"name":"test space","owner":"demo"}' -H 'Content-Type: application/json' http://localhost:4567/spaces
+    curl -v -d '{"username":"demo","password":"password"}' -H 'Content-Type: application/json' http://localhost:4567/users
+    curl -v -u demo:password -d '{"name":"test space","owner":"demo"}' -H 'Content-Type: application/json' http://localhost:4567/spaces
     ```
 #### Audit Logging
 - Audit logging should occur after authentication, so that you know who is performing an action, but before you make authorization decisions that may deny access. The reason for this is that you want to record all attempted operations, not just the successful ones.
@@ -241,3 +241,25 @@ afterAfter((request, response) -> {
   curl -v --cacert "$(mkcert -CAROOT)/rootCA.pem" https://localhost:4567/logs | jq
   ```  
 #### Access Control
+- The two main HTTP status codes for indicating that access has been denied are 401 Unauthorized and 403 Forbidden.
+- The 403 Forbidden status code, on the other hand, tells the client that its credentials were fine for authentication, but that it’s not allowed to perform the operation it requested. This is a failure of authorization, not authentication.
+- A simple filter that runs after authentication and verifies that a genuine subject has been recorded in the request attributes. If no subject attribute is found, then it rejects the request with a 401 status code and adds a standard ***WWW-Authenticate*** header to inform the client that the user should authenticate with Basic authentication.
+  ```
+  curl -v --cacert "$(mkcert -CAROOT)/rootCA.pem" -d '{"username":"demo","password":"password"}' -H 'Content-Type: application/json' https://localhost:4567/users
+  curl -v --cacert "$(mkcert -CAROOT)/rootCA.pem" -u demo:password -d '{"name":"test space","owner":"demo"}' -H 'Content-Type: application/json' https://localhost:4567/spaces
+  ```
+
+##### Access control lists
+- A very simple access control method based upon whether a user is a member of the social space they are trying to access.
+- Accomplish this by keeping track of which users are members of which social spaces in a structure known as an access control list (ACL).
+- Each entry for a space will list a user that may access that space, along with a set of permissions that define what they can do.
+
+> For example, you might let anyone in your company see their own salary information in your payroll API, but the ability to change somebody’s salary is not normally something you would allow any employee to do! Recall the principle of least authority (POLA).
+
+> Too many permissions and they may cause damage to the system. Too few permissions and they may try to work around the security of the system to get their job done.
+
+##### Avoiding privilege escalation attacks
+- A privilege escalation (or elevation of privilege) occurs when a user with limited permissions can exploit a bug in the system to grant themselves or somebody else more permissions than they have been granted.
+- You can fix this in two general ways:
+  * The permissions granted to the new user are no more than the permissions that are granted to the existing user. That is, you should ensure that evildemo2 is only granted the same access as the demo2 user.
+  * Require that only users with all permissions can add other users.

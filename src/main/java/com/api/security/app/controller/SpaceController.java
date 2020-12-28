@@ -38,6 +38,8 @@ public class SpaceController {
 
             database.updateUnique("insert into spaces(space_id,name,owner) values (?,?,?);",spaceId,spaceName,owner);
 
+            database.updateUnique("INSERT INTO permissions(space_id, user_id, perms) VALUES (?, ?, ?)", spaceId, owner, "rwd");
+
             response.status(201);
             response.header("Location","/spaces/"+spaceId);
 

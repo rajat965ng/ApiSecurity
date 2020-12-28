@@ -35,15 +35,20 @@ public class App {
             }
         }));
 
-        var spaceController = new SpaceController(database);
-        post("/spaces",spaceController::createSpace);
 
         var userController = new UserController(database);
-        before(userController::authenticate);
         before(auditController::auditRequestStart);
         afterAfter(auditController::auditRequestEnd);
         post("/users", userController::registerUser);
 
+
+
+        var spaceController = new SpaceController(database);
+        before(userController::authenticate);
+        before(auditController::auditRequestStart);
+        afterAfter(auditController::auditRequestEnd);
+        before("/spaces",userController::requireAuthentication);
+        post("/spaces",spaceController::createSpace);
 
         get("/logs",auditController::readAuditLog);
 
