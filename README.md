@@ -194,6 +194,9 @@ afterAfter((request, response) -> {
   ```
   curl -v --cacert "$(mkcert -CAROOT)/rootCA.pem" -d '{"username":"demo","password":"password"}' -H 'Content-Type: application/json' https://localhost:4567/users
   ```
+- Strict transport security
+  * API clients also often send sensitive data such as passwords on the first request so it is better to completely reject non-HTTPS requests. If for some reason you do need to support web browsers directly connecting to your API endpoints, then best practice is to immediately redirect them to the HTTPS version of the API and to set the HTTP Strict-Transport-Security (HSTS) header to instruct the browser to always use the HTTPS version in future. 
+  * Set **Strict-Transport-Security** header.
 #### Rate Limiting
 - In a DNS amplification attack, the attacker sends the same DNS query to many DNS servers, spoofing their IP address to look like the request came from the victim. By carefully choosing the DNS query, the server can be tricked into replying with much more data than was in the original query, flooding the victim with traffic.
 - Application layer DoS attacks attempt to overwhelm an API by sending valid requests, but at much higher rates than a normal client. 
@@ -225,4 +228,16 @@ afterAfter((request, response) -> {
     curl -u demo:password -d '{"name":"test space","owner":"demo"}' -H 'Content-Type: application/json' http://localhost:4567/spaces
     ```
 #### Audit Logging
+- Audit logging should occur after authentication, so that you know who is performing an action, but before you make authorization decisions that may deny access. The reason for this is that you want to record all attempted operations, not just the successful ones.
+- Unsuccessful attempts to perform actions may be indications of an attempted attack.
+- In a production environment you typically will want to send audit logs to a centralized log collection and analysis tool, known as a SIEM (Security Information and Event Management) system, so they can be correlated with logs from other systems and analyzed for potential threats and unusual behavior.
+- For development, you’ll add a new database table to store the audit logs.
+- You split the logging into two filters, one that occurs before the request is processed (after authentication), and one that occurs after the response has been produced.
+- You should normally lock down audit logs to only a small number of trusted users, as they are often sensitive in themselves. Often the users that can access audit logs (auditors) are different from the normal system administrators, as administrator accounts are the most privileged and so most in need of monitoring. This is an important security principle known as **separation of duties**. 
+  ```
+  For example, a system administrator should not also be responsible for managing the audit logs for that system. In financial systems, separation of duties is often used to ensure that the person who requests a payment is not also the same person who approves the payment, providing a check against fraud.
+  ```
+  ```
+  curl -v --cacert "$(mkcert -CAROOT)/rootCA.pem" https://localhost:4567/logs | jq
+  ```  
 #### Access Control

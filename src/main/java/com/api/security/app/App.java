@@ -1,5 +1,6 @@
 package com.api.security.app;
 
+import com.api.security.app.controller.AuditController;
 import com.api.security.app.controller.SpaceController;
 import com.api.security.app.controller.UserController;
 import com.google.common.util.concurrent.RateLimiter;
@@ -25,6 +26,8 @@ public class App {
         database.update(Files.readString(path));
 
         var rateLimiter = RateLimiter.create(Double.parseDouble("2"));
+        var auditController = new AuditController(database);
+
         before(((request, response) -> {
             if (!rateLimiter.tryAcquire()){
                 response.header("Retry-After","2");
@@ -36,9 +39,13 @@ public class App {
         post("/spaces",spaceController::createSpace);
 
         var userController = new UserController(database);
-        post("/users", userController::registerUser);
         before(userController::authenticate);
+        before(auditController::auditRequestStart);
+        afterAfter(auditController::auditRequestEnd);
+        post("/users", userController::registerUser);
 
+
+        get("/logs",auditController::readAuditLog);
 
         afterAfter((request, response) -> {
             response.type("application/json;charset=utf-8");
@@ -48,6 +55,7 @@ public class App {
             response.header("Cache-Control", "no-store");
             response.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; sandbox");
             response.header("Server", "");
+            response.header("Strict-Transport-Security", "max-age=31536000");
         });
 
         after(((request, response) -> {
