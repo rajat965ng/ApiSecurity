@@ -230,7 +230,7 @@ afterAfter((request, response) -> {
 #### Audit Logging
 - Audit logging should occur after authentication, so that you know who is performing an action, but before you make authorization decisions that may deny access. The reason for this is that you want to record all attempted operations, not just the successful ones.
 - Unsuccessful attempts to perform actions may be indications of an attempted attack.
-- In a production environment you typically will want to send audit logs to a centralized log collection and analysis tool, known as a SIEM (Security Information and Event Management) system, so they can be correlated with logs from other systems and analyzed for potential threats and unusual behavior.
+- In a production environment you typically will want to send audit logs to a centralized log collection and analysis tool, known as a **SIEM (Security Information and Event Management)** system, so they can be correlated with logs from other systems and analyzed for potential threats and unusual behavior.
 - For development, you’ll add a new database table to store the audit logs.
 - You split the logging into two filters, one that occurs before the request is processed (after authentication), and one that occurs after the response has been produced.
 - You should normally lock down audit logs to only a small number of trusted users, as they are often sensitive in themselves. Often the users that can access audit logs (auditors) are different from the normal system administrators, as administrator accounts are the most privileged and so most in need of monitoring. This is an important security principle known as **separation of duties**. 
