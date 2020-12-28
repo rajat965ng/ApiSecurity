@@ -175,3 +175,40 @@ afterAfter((request, response) -> {
 |frame-ancestors|'none'|A replacement for X-Frame-Options, this prevents the response being loaded into an iframe.|
 |sandbox|n/a|Disables scripts and other potentially dangerous content from being executed.|
 
+## Securing the Natter API
+
+### Addressing threats with security controls
+#### Encryption
+- TBD
+#### Rate Limiting
+- In a DNS amplification attack, the attacker sends the same DNS query to many DNS servers, spoofing their IP address to look like the request came from the victim. By carefully choosing the DNS query, the server can be tricked into replying with much more data than was in the original query, flooding the victim with traffic.
+- Application layer DoS attacks attempt to overwhelm an API by sending valid requests, but at much higher rates than a normal client. 
+- Rate-limiting should be the very first security decision made when a request reaches your API. Because the goal of rate-limiting is ensuring that your API has enough resources to be able to process accepted requests, you need to ensure that requests that exceed your API’s capacities are rejected quickly and very early in processing.
+  * Rate-limiting with Guava
+    * Often rate-limiting is applied at a reverse proxy, API gateway, or load balancer before the request reaches the API, so that it can be applied to all requests arriving at a cluster of servers.
+    * Even if you enforce rate-limiting at a proxy server, it is good security practice to also enforce rate limits in each server so that if the proxy server misbehaves or is misconfigured, it is still difficult to bring down the individual servers.
+    * This is an instance of the general security principle known as **defense in depth**, which aims to ensure that no failure of a single mechanism is enough to compromise your API.
+      ```
+          for i in {1..5}
+          do
+          curl -i -d "{\"owner\":\"test\",\"name\":\"space$i\"}" -H ‘Content-Type: application/json’ http://localhost:4567/spaces;
+          done
+      ```  
+
+#### Authentication
+- The process of verifying that a user is who they say they are.
+- Authentication occurs after rate-limiting but before audit logging or access control. All requests proceed, even if authentication fails, to ensure that they are always logged. Unauthenticated requests will be rejected during access control, which occurs after audit logging.
+- You can also outsource authentication to another organization using a federation protocol like SAML or OpenID Connect.
+- Creating the password database
+  * Create a 'user' table in schema.sql .
+  * Scrypt takes several parameters to tune the amount of time and memory that it will use. 
+  * which should take around 100ms on a single CPU and 32MiB of memory.
+  * This may seem an excessive amount of time and memory, but these parameters have been carefully chosen based on the speed at which attackers can guess passwords. Dedicated password cracking machines, which can be built for relatively modest amounts of money, can try many millions or even billions of passwords per second. The expensive time and memory requirements of secure password hashing algorithms such as Scrypt reduce this to a few thousand passwords per second, hugely increasing the cost for the attacker and giving users valuable time to change their passwords after a breach is discovered.
+  * The Scrypt library generates a unique random salt value for each password hash. The hash string that gets stored in the database includes the parameters that were used when the hash was generated, as well as this random salt value. This ensures that you can always recreate the same hash in future, even if you change the parameters.
+    ```
+    curl -d '{"name":"test space","owner":"demo"}' -H 'Content-Type: application/json' http://localhost:4567/spaces
+    curl -d '{"username":"demo","password":"password"}' -H 'Content-Type: application/json' http://localhost:4567/users
+    curl -u demo:password -d '{"name":"test space","owner":"demo"}' -H 'Content-Type: application/json' http://localhost:4567/spaces
+    ```
+#### Audit Logging
+#### Access Control

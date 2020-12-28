@@ -1,6 +1,8 @@
 package com.api.security.app;
 
 import com.api.security.app.controller.SpaceController;
+import com.api.security.app.controller.UserController;
+import com.google.common.util.concurrent.RateLimiter;
 import org.dalesbred.Database;
 import org.h2.jdbcx.JdbcConnectionPool;
 import org.json.JSONObject;
@@ -19,10 +21,21 @@ public class App {
         var path = Paths.get(App.class.getResource("/schema.sql").toURI());
         database.update(Files.readString(path));
 
+        var rateLimiter = RateLimiter.create(Double.parseDouble("2"));
+        before(((request, response) -> {
+            if (!rateLimiter.tryAcquire()){
+                response.header("Retry-After","2");
+                halt(429);
+            }
+        }));
+
 
         var spaceController = new SpaceController(database);
-
         post("/spaces",spaceController::createSpace);
+
+        var userController = new UserController(database);
+        post("/users", userController::registerUser);
+        before(userController::authenticate);
 
 
         afterAfter((request, response) -> {
