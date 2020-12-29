@@ -263,3 +263,20 @@ afterAfter((request, response) -> {
 - You can fix this in two general ways:
   * The permissions granted to the new user are no more than the permissions that are granted to the existing user. That is, you should ensure that evildemo2 is only granted the same access as the demo2 user.
   * Require that only users with all permissions can add other users.
+  
+
+## Session cookie authentication
+- In token-based authentication, a user’s real credentials are presented once, and the client is then given a short-lived token.
+- A token is typically a short, random string that can be used to authenticate API calls until the token expires.
+
+### Authentication in web browsers
+#### Calling the Natter API from JavaScript
+- Use the Fetch interface in this example because it is much simpler and already widely supported by browsers.
+#### Drawbacks of HTTP authentication (Basic Auth)
+- The user’s password is sent on every API call, increasing the chance of it acci- dentally being exposed by a bug in one of those operations.
+- Verifying a password is an expensive operation, and performing this validation on every API call adds a lot of overhead.
+- The dialog box presented by browsers for HTTP Basic authentication is pretty ugly, with not much scope for customization. The user experience leaves a lot to be desired.
+- There is no obvious way for the user to ask the browser to forget the password. On a public terminal, this is a serious security problem if the next user can visit pages using your stored password just by clicking the Back button.
+#### Token-based authentication
+- When a user logs in by presenting their username and password, the API will generate a random string (the token) and give it to the cli- ent. The client then presents the token on each subsequent request, and the API can look up the token in a database on the server to see which user is associated with that session.
+- When the user logs out, or the token expires, it is deleted from the database, and the user must log in again if they want to keep using the API.
