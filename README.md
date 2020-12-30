@@ -278,5 +278,104 @@ afterAfter((request, response) -> {
 - The dialog box presented by browsers for HTTP Basic authentication is pretty ugly, with not much scope for customization. The user experience leaves a lot to be desired.
 - There is no obvious way for the user to ask the browser to forget the password. On a public terminal, this is a serious security problem if the next user can visit pages using your stored password just by clicking the Back button.
 #### Token-based authentication
-- When a user logs in by presenting their username and password, the API will generate a random string (the token) and give it to the cli- ent. The client then presents the token on each subsequent request, and the API can look up the token in a database on the server to see which user is associated with that session.
+- When a user logs in by presenting their username and password, the API will generate a random string (the token) and give it to the client. The client then presents the token on each subsequent request, and the API can look up the token in a database on the server to see which user is associated with that session.
 - When the user logs out, or the token expires, it is deleted from the database, and the user must log in again if they want to keep using the API.
+
+![](.README/61292950.png)
+
+#### A token store abstraction
+- TokenStore interface and its associated Token class as a UML class diagram. Each token has an associated username and an expiry time, and a collection of attributes that you can use to associate information with the token, such as how the user was authenticated or other details that you want to use to make access control decisions.
+- Creating a token in the store returns its ID, allowing different store implementations to decide how the token should be named.
+
+![](.README/cbf08cba.png)
+
+#### Implementing token-based login
+- The user controller authenticates the user with HTTP Basic authentication as before. If that succeeds, then the request continues to the token login endpoint, which can retrieve the authenticated subject from the request attributes. 
+- Otherwise, the request is rejected because the endpoint requires authentication.
+
+![](.README/46f8af44.png)
+
+
+#### Session cookies
+- After the user authenticates, the login endpoint returns a **Set-Cookie** header on the response.
+- That instructs the web browser to store a random session token in the cookie storage.
+- Subsequent requests to the same site will include the token as a **Cookie** header.
+
+![](.README/d1d7261e.png)
+
+- To access the session associated with a request, you can use the request.session() method.
+```
+Session session = request.session(true);
+```
+- To create a new session, you pass a true value, in which case Spark will generate a new session token and store it in its database. It will then add a Set-Cookie header to the response.
+- If you pass a false value, then Spark will return null if there is no Cookie header on the request with a valid session token.
+
+#### Avoiding session fixation attacks
+- A session fixation attack occurs when an API fails to generate a new session token after a user has authenticated. 
+- The attacker captures a session token from loading the site on their own device and then injects that token into the victim’s browser.
+- Once the victim logs in, the attacker can use the original session token to access the victim’s account.
+
+![](.README/399cb538.png)
+
+- Browsers will prevent a site hosted on a different origin from setting cookies for your API, but there are still ways that session fixation attacks can be exploited.
+- **The default, and safest, mechanism is to store the token in a cookie.**
+- The **;JSESSIONID=...** bit is added by the container and is parsed out of the URL on sub- sequent requests. This style of session storage makes it much easier for an attacker to carry out a session fixation attack.
+- Ensure that the session tracking-mode is set to COOKIE in your web.xml
+```
+<session-config>
+    <tracking-mode>COOKIE</tracking-mode>
+</session-config>
+```
+
+- prevent session fixation attacks by ensuring that any existing session is invalidated after a user authenticates. This ensures that a new random session identifier is generated, which the attacker is unable to guess. The attacker’s session will be logged out.
+```
+
+ var session = request.session(false);
+
+ if (session != null) {
+    session.invalidate(); 
+ }
+ session = request.session(true);
+   
+```
+
+#### Cookie security attributes
+- |Cookie Attribute|Meaning|
+  |----------------|-------|
+  |Secure|Secure cookies are only ever sent over a HTTPS connection and so cannot be stolen by network eavesdroppers.|
+  |HttpOnly|Cookies marked HttpOnly cannot be read by JavaScript, making them slightly harder to steal through XSS attacks.|
+  |SameSite|SameSite cookies will only be sent on requests that originate from the same origin as the cookie.|
+  |Domain|If no Domain attribute is present, then a cookie will only be sent on requests to the exact host that issued the Set-Cookie header. This is known as a host-only cookie. If you set a Domain attribute, then the cookie will be sent on requests to that domain and all sub-domains.|
+  |Path|If the Path attribute is set to /users, then the cookie will be sent on any request to a URL that matches /users or any sub-path such as /users/mary, but not on a request to /cats/mrmistoffelees. The Path defaults to the parent of the request that returned the Set-Cookie header, so you should normally explicitly set it to / if you want the cookie to be sent on all requests to your API. **The Path attribute has limited security benefits, as it is easy to defeat by creating a hidden iframe with the correct path and reading the cookie through the DOM.**|
+  |Expires and Max-Age|Sets the time at which the cookie expires and should be forgotten by the client, either as an explicit date and time (Expires) or as the number of seconds from now (Max-Age).|
+- The Secure and HttpOnly attributes should be set on any cookie used for security purposes.  
+- Avoid setting a Domain attribute unless you absolutely need the same cookie to be sent to multiple sub-domains, because if just one sub-domain is compromised then an attacker can steal your session cookies.
+> This typically occurs when a temporary site is created on a shared service like GitHub Pages and configured as a sub-domain of the main website. When the site is no longer required, it is deleted but the DNS records are often forgotten. An attacker can discover these DNS records and re-register the site on the shared web host, under the attacker's control. They can then serve their content from the compromised sub-domain.
+
+#### Validating session cookies
+- NA
+
+### Preventing Cross-Site Request Forgery attacks
+- The appeal of cookies as an API designer is that, once set, the browser will transparently add them to every request.
+- Alas, this strength is also one of the greatest weaknesses of session cookies.
+- The browser will also attach the same cookies when requests are made from other sites that are not your UI. Because you’re still logged in, the browser happily sends your session cookie along with those requests.
+
+![](.README/c1b75dfc.png)
+
+#### SameSite cookies
+- When a cookie is marked as SameSite, it will only be sent on requests that originate from the same registerable domain that originally set the cookie.
+- To mark a cookie as SameSite, you can add either SameSite=lax or SameSite=strict on the Set-Cookie header, just like marking a cookie as Secure or HttpOnly.
+
+#### Hash-based double-submit cookies
+- The most effective defense against CSRF attacks is to require that the caller prove that they know the session cookie, or some other unguessable value associated with the session.
+- A common approach is to store this extra random token as a second cookie in the browser and require that it be sent as both a cookie and as an X-CSRF-Token header on each request. This second cookie is not marked HttpOnly, so that it can be read from JavaScript (but only from the same origin).
+- This approach is known as a double-submit cookie, as the cookie is submitted to the server twice.
+
+***This solution has some problems.***
+- There are several ways that the cookie could be overwritten by the attacker with a known value, which would then let them forge requests.
+
+***Solution***
+- Make the second token be cryptographically bound to the real session cookie.
+ 
+![](.README/88963438.png)
+
