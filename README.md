@@ -379,3 +379,139 @@ Session session = request.session(true);
  
 ![](.README/88963438.png)
 
+## Modern token-based authentication
+
+> Cross-origin resource sharing (CORS) is a standard to allow some cross-origin requests to be permitted by web browsers. It defines a set of headers that an API can return to tell the browser which requests should be allowed.
+
+### Allowing cross-domain requests with CORS
+- Because the new site has a different origin
+  * Attempting to send a login request from the new site is blocked because the JSON Content-Type header is disallowed by the same-origin policy (SOP).
+  * Even if you could send the request, the browser will ignore any Set-Cookie headers on a cross-origin response, so the session cookie will be discarded.
+  * You also cannot read the anti-CSRF token, so cannot make requests from the new site even if the user is already logged in.
+
+#### Preflight requests
+- A preflight request occurs when a browser would normally block the request for violating the same-origin policy. 
+- The browser makes an HTTP OPTIONS request to the server asking if the request should be allowed.
+- The server can either deny the request or else allow it with restrictions on the allowed headers and methods.
+
+![](.README/7dc06d4d.png)
+
+- The browser first makes an HTTP OPTIONS request to the target server. It includes the origin of the script making the request as the value of the Origin header, along with some headers indicating the HTTP method of the method that was requested (Access-Control-Request-Method header) and any nonstandard headers that were in the original request (Access-Control-Request-Headers).
+
+#### CORS headers
+- CORS headers that the server can send in the response
+
+|CORS header|Response|Description|
+|-----------|--------|-----------|
+|Access-Control-Allow-Origin|Both|Specifies a single origin that should be allowed access, or else the wildcard * that allows access from any origin.|
+|Access-Control-Allow-Headers|Preflight|Lists the non-simple headers that can be included on cross-origin requests to this server. The wildcard value * can be used to allow any headers.|
+|Access-Control-Allow-Methods|Preflight|Lists the HTTP methods that are allowed, or the wildcard * to allow any method.|
+|Access-Control-Allow-Credentials|Both|Indicates whether the browser should include cre- dentials on the request. Credentials in this case means browser cookies, saved HTTP Basic/Digest passwords, and TLS client certificates. If set to true, then none of the other headers can use a wildcard value.|
+|Access-Control-Max-Age|Preflight|Indicates the maximum number of seconds that the browser should cache this CORS response. Browsers typically impose a hard-coded upper limit on this value of around 24 hours or less (Chrome currently limits this to just 10 minutes). This only applies to the allowed headers and allowed methods.|
+|Access-Control-Expose-Headers|Actual|Only a small set of basic headers are exposed from the response to a cross-origin request by default. Use this header to expose any nonstandard headers that your API returns in responses.|
+
+- If you return a specific allowed origin in the **Access-Control-Allow-Origin** response header, then you should also include a **Vary: Origin** header to ensure the browser and any network proxies only cache the response for this specific requesting origin.
+
+#### Adding CORS headers to the API
+- Because cookies are considered a credential by CORS, you need to return an **Access-Control-Allow-Credentials: true** header from preflight requests; otherwise, the browser will not send the session cookie.
+- Browsers will also ignore any **Set-Cookie headers** in the response to a CORS request unless the response contains **Access-Control-Allow-Credentials: true**.
+
+> SameSite cookies,are fundamentally incompatible with CORS. If a cookie is marked as SameSite, then it will not be sent on cross-site requests regardless of any CORS policy and the Access-Control-Allow-Credentials header is ignored.
+> A complication came in October 2019, when Google announced that its Chrome web browser would start marking all cookies as SameSite=lax by default with the release of Chrome 80 in February 2020. (At the time of writing the rollout of this change has been temporarily paused due to the COVID-19 coronavirus pandemic.) If you wish to use cross-site cookies you must now explicitly opt-out of SameSite protections by adding the SameSite=none and Secure attributes to those cookies, but this can cause problems in some web browsers
+> Google, Apple, and Mozilla are all becoming more aggressive in blocking cross-site cookies to prevent tracking and other security or privacy issues.
+
+### Tokens without cookies
+- Cookies are such a compelling option for web-based clients because they provide the three components needed to implement token-based authentication in a neat pre-packaged bundle.
+  * A standard way to communicate tokens between the client and the server, in the form of the Cookie and Set-Cookie headers.
+  * A convenient storage location for tokens on the client, that persists across page loads (and reloads) and redirections.
+  * Simple and robust server-side storage of token state, as most web frameworks support cookie storage out of the box just like Spark.
+- To replace cookies, you’ll therefore need a replacement for each of these three aspects
+
+#### Storing token state in a database
+- A token is a simple data structure that should be independent of dependencies on other functionality in your API.
+-  A single table is enough to store this structure.
+```
+CREATE TABLE tokens(
+    token_id VARCHAR(100) PRIMARY KEY,
+    user_id VARCHAR(30) NOT NULL,
+    expiry TIMESTAMP NOT NULL,
+    attributes VARCHAR(4096) NOT NULL
+);
+
+GRANT SELECT, INSERT, DELETE ON tokens TO natter_api_user;    
+```  
+- To be secure, a token ID should be generated with a high degree of entropy from a cryptographically-secure random number generator (RNG).
+> In information security, entropy is a measure of how likely it is that a random variable has a given value. When a variable is said to have 128 bits of entropy, that means that there is a 1 in 2^128 chance of it having one specific value rather than any other value. The more entropy a variable has, the more difficult it is to guess what value it has. If your API issues a very large number of tokens with long expiry times, then you should consider a higher entropy of 160 bits or more.   
+
+#### The Bearer authentication scheme
+- A standard way to pass non-cookie-based tokens to an API exists in the form of the Bearer token scheme for HTTP authentication.
+- A bearer token can be given to a third party to grant them access without revealing user credentials but can also be used easily by attackers if stolen.
+  
+>eg. Authorization: Bearer QDAmQ9TStkDCpVK5A9kFowtYn2k
+
+- if a client passed a token that has expired you could return:
+> HTTP/1.1 401 Unauthorized
+  WWW-Authenticate: Bearer realm="users", error="invalid_token", error_description="Token has expired"
+  
+#### Deleting expired tokens
+- If tokens are not deleted, this also creates a potential DoS attack vector, because an attacker could keep logging in to generate enough tokens to fill the database storage.
+- You should index the expiry column on the database, so that it does not need to loop through every single token to find the ones that have expired. Open schema.sql and add the following line to the bottom to create the index:
+> CREATE INDEX expired_token_idx ON tokens(expiry);
+- Finally, you need to schedule a periodic task to call the method to delete the expired tokens.
+> DELETE FROM tokens WHERE expiry < current_timestamp
+
+#### Storing tokens in Web Storage
+- Update the UI to send the token in the Authorization header instead of in the X-CSRF-Token header.
+- Alternatives to cookies for storing tokens in a web browser client.
+  * The Web Storage API that includes the localStorage and sessionStorage objects for storing simple key-value pairs. **sessionStorage** is not shared between browser tabs or windows; each tab gets its own storage.
+    * The sessionStorage object can be used to store data until the browser window or tab is closed.
+    * The localStorage object stores data until it is explicitly deleted, saving the data even over browser restarts.
+  * The IndexedDB API that allows storing larger amounts of data in a more sophisticated JSON NoSQL database.
+- By replacing cookies for storage on the client, you will now have a replacement for all three aspects of token-based authentication provided by cookies.
+  * On the backend, you can manually store cookie state in a database to replace the cookie storage provided by most web frameworks.
+  * You can use the Bearer authentication scheme as a standard way to communicate tokens from the client to the API, and to prompt for tokens when not supplied.
+  * Cookies can be replaced on the client by the Web Storage API.
+  
+![](.README/693f561b.png)  
+
+#### Updating the CORS filter
+- Now that your API no longer needs cookies to function, you can tighten up the CORS settings.
+- Remove the **Access- Control-Allow-Credentials** headers to stop the browser sending any.
+- Remove **X-CSRF-Token**.
+
+#### XSS attacks on Web Storage
+- Exfiltration is the act of stealing tokens and sensitive data from a page and sending them to the attacker without the victim being aware. The attacker can then use the stolen tokens to log in as the user from the attacker’s own device.
+- ![](.README/d907e9fb.png)
+- Although using **HttpOnly** cookies can protect against this attack.
+- Two technologies are worth mentioning because they provide significant hardening against XSS:
+  * Content-Security-Policy header (CSP): provides fine-grained control over which scripts and other resources can be loaded by a page and what they are allowed to do.
+  * DOM-based XSS occurs when trusted Java- Script code accidentally allows user-supplied HTML to be injected into the DOM, such as when assigning user input to the .innerHTML attribute of an existing element. DOM-based XSS is notoriously difficult to prevent as there are many ways that this can occur, not all of which are obvious from inspection.
+  
+### Hardening database token storage
+- As a first step, you should separate the database server from the API and ensure that the database is not directly accessible by external clients.
+- Communication between the database and the API should be secured with TLS.  
+
+#### Hashing database tokens
+- You can use a fast, cryptographic hash function such as SHA-256 that you used for generating anti-CSRF tokens.
+- ![](.README/19d38937.png)
+- Because SHA-256 is a one-way hash function, an attacker that gains access to the database won’t be able to reverse the hash function to determine the real token IDs.
+- To read or revoke the token, you simply hash the value provided by the user and use that to look up the record in the database.
+
+#### Authenticating tokens with HMAC
+- Simple hashing does not prevent **an attacker with write access** from inserting a fake token that gives them access to another user’s account.
+- Most databases are also not designed to provide constant-time equality comparisons, so database lookups can be vulnerable to timing attacks.
+- Eliminate both issues by calculating a **message authentica-tion code (MAC)**, such as the standard **hash-based MAC (HMAC)**. HMAC works like a normal cryptographic hash function, but incorporates a secret key known only to the API server.
+- An attacker without access to the secret cannot compute a correct tag for any message. HMAC (hash-based MAC) is a widely used secure MAC based on a cryptographic hash function.
+![](.README/ebcb6ef9.png)
+
+##### GENERATING THE KEY
+- Key used for HMAC-SHA256 is just a 32-byte random value, so you could generate one using a SecureRandom just like you currently do for database token IDs.
+- Store the key in an external keystore that can be loaded by each server.
+
+> A keystore is an encrypted file that contains cryptographic keys and TLS certificates used by your API. A keystore is usually protected by a password.
+
+- Run the following command to generate a keystore with a 256-bit HMAC key:
+  ```
+   keytool -genseckey -keyalg HmacSHA256 -keysize 256 -alias hmac-key -keystore keystore.p12 -storetype PKCS12 -storepass changeit
+  ```
+  
