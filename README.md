@@ -514,4 +514,224 @@ GRANT SELECT, INSERT, DELETE ON tokens TO natter_api_user;
   ```
    keytool -genseckey -keyalg HmacSHA256 -keysize 256 -alias hmac-key -keystore keystore.p12 -storetype PKCS12 -storepass changeit
   ```
+
+## Self-contained tokens and JWTs
+- **stateless tokens** that would allow you to get rid of the database entirely.  
+- JSON Web Tokens (JWTs, pronounced “jots”) are a standard format for self-contained security tokens. 
+- A JWT consists of a set of claims about a user represented as a JSON object, together with a header describing the format of the token. JWTs are cryptographically protected against tampering and can also be encrypted.
+
+### Storing token state on the client
+
+> Rather than store the token state in the database, you can instead encode that state directly into the token ID and send it to the client. 
+
+- You could serialize the token fields into a JSON object, which you then **Base64url-encode** to create a string that you can use as the token ID. When the token is presented back to the API, you then simply decode the token and parse the JSON to recover the attributes of the session.
+
+#### Protecting JSON tokens with HMAC
+- Of course, as it stands, this code is completely insecure. Anybody can log in to the API and then edit the encoded token in their browser to change their username or other security attributes.
+- By appending an authentication tag computed with a secret key known only to the API server, an attacker is prevented from either creating a fake token or altering an existing one.
+```
+curl -H 'Content-Type: application/json' -u test:password \
+  -X POST https://localhost:4567/sessions
+  {"token":"eyJzdWIiOiJ0ZXN0IiwiZXhwIjoxNTU5NTgyMTI5LCJhdHRycyI6e319.INFgLC3cAhJ8DjzPgQfHBHvU_uItnFjt568mQ43V7YI"}
+```
+
+![](.README/e5759ebc.png)
+
+### JSON Web Tokens
+- JWTs are very similar to the JSON tokens you have just produced, but have many more features:
+  * A standard header format that contains metadata about the JWT, such as which MAC or encryption algorithm was used.
+  * A set of standard claims that can be used in the JSON content of the JWT.
+  * A wide range of algorithms for authentication and encryption, as well as digital signatures and public key encryption.
   
+```
+basic authenticated JWT = HMAC-authenticated JSON tokens +  an additional JSON header that indicates the algorithm and other details
+```  
+
+![](.README/bdcb95df.png)
+
+>  JOSE is a kit-of-parts design, allowing develop- ers to pick and choose from a wide variety of algorithms, and not all combinations of features are secure.
+
+> In 2015 the security researcher Tim McClean discovered vulnerabilities in many JWT libraries (http://mng.bz/awKz) in which an attacker could change the algorithm header in a JWT to influence how the recipient validated the token. It was even possible to change it to the value none, which instructed the JWT library to not validate the signature at all! 
+
+#### The standard JWT claims
+
+|Claim|Name|Purpose|
+|-----|----|-------|
+|iss|Issuer|Indicates who created the JWT. This is a single string and often the URI of the authentication service.|
+|aud|Audience|Indicates who the JWT is for. An array of strings identifying the intended recipients of the JWT.|
+|iat|Issued-At|The UNIX time at which the JWT was created.|
+|nbf|Not-Before|The JWT should be rejected if used before this time.|
+|exp|Expiry|The UNIX time at which the JWT expires and should be rejected by recipients.|
+|sub|Subject|The identity of the subject of the JWT. A string. Usually a username or other unique identifier.|
+|jti|JWT ID|A unique ID for the JWT, which can be used to detect replay.|
+
+- Only the issuer, issued-at, and subject claims express a positive statement.
+- The remaining fields all describe constraints on how the token can be used rather than making a claim. 
+  * These constraints are intended to prevent certain kinds of attacks against security tokens, such as replay attacks in which a token sent by a genuine party to a service to gain access is captured by an attacker and later replayed so that the attacker can gain access.
+  * Replay attacks are largely prevented by the use of TLS but can be important if you have to send a token over an insecure channel or as part of an authentication protocol.
+  * If the attacker replays the token back to the original issuer, this is known as a reflection attack, and can be used to defeat some kinds of authentication protocols if the recipient can be tricked into accepting their own authentication messages. By verifying that your API server is in the audience list, and that the token was issued by a trusted party, these attacks can be defeated.
+
+#### The JOSE header
+- flexibility of the JOSE and JWT standards is concentrated in the header.
+- For example, the following header indicates that the token is signed with HMAC-SHA-256 using a key with the given key ID:
+```
+    {
+        "alg": "HS256",
+        "kid": "hmac-key-1"
+    }
+```  
+- It is recommended that they are stripped when possible to create (nonstandard) headless JWTs. 
+  * This can be done by removing the header section produced by a standard JWT library before sending it and then recreating it again before validating a received JWT.
+  
+#### Generating standard JWTs
+
+- Dependency
+```
+<dependency>
+      <groupId>com.nimbusds</groupId>
+      <artifactId>nimbus-jose-jwt</artifactId>
+      <version>8.19</version>
+</dependency>
+```
+- The Nimbus library requires a JWSSigner object for generating signatures, and a JWSVerifier for verifying them.
+- These objects can often be used with several algorithms, so you should also pass in the specific algorithm to use as a separate JWSAlgorithm object.
+- Finally, you should also pass in a value to use as the audience for the generated JWTs. 
+- The serialize() method will then produce the JWS Compact Serialization of the JWT to return as the token identifier.
+
+- Code
+
+```
+public class SignedJwtTokenStore implements TokenStore {
+
+private final JWSSigner signer;
+private final JWSVerifier verifier;
+private final JWSAlgorithm algorithm;
+private final String audience;
+    
+    public SignedJwtTokenStore(JWSSigner signer,JWSVerifier verifier, JWSAlgorithm algorithm,String audience) {
+        this.signer = signer;
+        this.verifier = verifier;
+        this.algorithm = algorithm;
+        this.audience = audience;
+    }
+    
+    @Override
+    public String create(Request request, Token token) {
+        var claimsSet = new JWTClaimsSet.Builder()
+                .subject(token.username)
+                .audience(audience)
+                .expirationTime(Date.from(token.expiry))
+                .claim("attrs", token.attributes)
+                .build();
+                
+        var header = new JWSHeader(JWSAlgorithm.HS256);
+        var jwt = new SignedJWT(header, claimsSet);
+        try {
+            jwt.sign(signer);
+            return jwt.serialize();
+        } catch (JOSEException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    
+}
+
+Main.java
+
+var algorithm = JWSAlgorithm.HS256;
+var signer = new MACSigner((SecretKey) macKey);
+var verifier = new MACVerifier((SecretKey) macKey);
+TokenStore tokenStore = new SignedJwtTokenStore(signer, verifier, algorithm, "https://localhost:4567");
+var tokenController = new TokenController(tokenStore);
+```
+
+- Usage
+```
+curl -H 'Content-Type: application/json' -u test:password -d '' https://localhost:4567/sessions
+
+{"token":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0IiwiYXVkIjoiaHR0cHM6XC9cL2xvY2FsaG9zdDo0NTY3IiwiZXhwIjoxNTc3MDA3ODcyLCJhdHRycyI6e319.nMxLeSG6pmrPOhRSNKF4v31eQZ3uxaPVyj-Ztf-vZQw "}
+```
+
+#### Validating a signed JWT
+- To validate a JWT, you first parse the JWS Compact Serialization format and then use the JWSVerifier object to verify the signature.
+- The Nimbus MACVerifier will calculate the correct HMAC tag and then compare it to the tag attached to the JWT using a constant-time equality comparison, just like you did in the HmacTokenStore.
+
+- Code
+```
+@Override
+public Optional<Token> read(Request request, String tokenId) {
+try {
+    var jwt = SignedJWT.parse(tokenId);
+    if (!jwt.verify(verifier)) {
+        throw new JOSEException("Invalid signature");
+    }
+    
+    var claims = jwt.getJWTClaimsSet();
+    if (!claims.getAudience().contains(audience)) {
+            throw new JOSEException("Incorrect audience");
+    }
+    
+    var expiry = claims.getExpirationTime().toInstant();
+    var subject = claims.getSubject();
+    var token = new Token(expiry, subject);
+    var attrs = claims.getJSONObjectClaim("attrs");
+    attrs.forEach((key, value) -> token.attributes.put(key, (String) value));
+    return Optional.of(token);
+    } catch (ParseException | JOSEException e) {
+        return Optional.empty();
+    }
+}
+```
+- Usage
+```
+curl -H 'Content-Type: application/json' \
+-H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN
+➥ 0IiwiYXVkIjoiaHR0cHM6XC9cL2xvY2FsaG9zdDo0NTY3IiwiZXhwIjoxNTc 
+➥ 3MDEyMzA3LCJhdHRycyI6e319.JKJnoNdHEBzc8igkzV7CAYfDRJvE7oB2md 
+➥ 6qcNgc_yM' -d '{"owner":"test","name":"test space"}' \
+  https://localhost:4567/spaces
+
+{"name":"test space","uri":"/spaces/1"}
+```
+
+### Encrypting sensitive attributes
+#### Authenticated encryption with NaCl
+
+```
+<dependency>
+      <groupId>software.pando.crypto</groupId>
+      <artifactId>salty-coffee</artifactId>
+      <version>1.0.2</version>
+</dependency>
+```
+
+```
+@Override
+public String create(Request request, Token token) {
+    var tokenId = delegate.create(request, token);
+    return SecretBox.encrypt(encryptionKey, tokenId).toString();
+}
+
+@Override
+public Optional<Token> read(Request request, String tokenId) {
+    var box = SecretBox.fromString(tokenId);
+    var originalTokenId = box.decryptToString(encryptionKey); return delegate.read(request, originalTokenId);
+}
+
+Main.java
+
+var macKey = keyStore.getKey("hmac-key", keyPassword);
+var encKey = keyStore.getKey("aes-key", keyPassword);
+var naclKey = SecretBox.key(encKey.getEncoded());
+var tokenStore = new EncryptedTokenStore(new JsonTokenStore(), naclKey);
+var tokenController = new TokenController(tokenStore);
+```
+
+### Using types for secure API design
+> Secure API design should make it very hard to write insecure code. It is not enough to merely make it possible to write secure code, because developers will make mistakes.
+
+![](.README/6c23a8eb.png)
+
+
+### Handling token revocation
+
