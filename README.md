@@ -734,4 +734,208 @@ var tokenController = new TokenController(tokenStore);
 
 
 ### Handling token revocation
+- FWD
 
+## OAuth2 and OpenID Connect
+
+### Scoped tokens
+- In the bad old days, if you wanted to use a third-party app or service to access your email or bank account, you had little choice but to give them your username and password and hope they didn’t misuse them.
+  * Unfortunately, some services did misuse those credentials.
+- Token-based authentication provides a solution to this problem by allowing you to generate a long-lived token that you can give to the third-party service instead of your password.
+  * Though using a token means that you don’t need to give the third-party your password, the tokens you’ve used so far still grant full access to APIs as if you were performing actions yourself.
+- The solution to these issues is to restrict the API operations that can be performed with a token, allowing it to be used only within a well-defined **scope**.
+  * Typically, the scope of a token is represented as one or more string labels stored as an attribute of the token.
+  * Eg. use the scope label **transactions:read** to allow read-access to transactions, and **payment:create** to allow setting up a new payment from an account.
+
+#### Adding scoped tokens to Natter
+- FWD
+#### The difference between scopes and permissions
+- When a user delegates some of their access to a third-party app or service, that is known as discretionary access control, because it’s up to the user how much of their access to grant to the third party.
+- OAuth scopes are fundamentally about discretionary access control,
+
+![](.README/cfa68e60.png)
+
+|Permissions|Scope|
+|-----------|-----|
+|Permissions should be designed based on access control decisions that an administrator may want to make for individual users.|Scopes should be designed based on anticipating how users may want to delegate their access to third-party apps and services.|
+||OAuth scopes used by Google for access to their Google Cloud Platform services.|
+|Access to individual keys is managed through permissions instead.| Services that deal with system administration jobs, such as the Key Management Service for handling cryptographic keys, only have a single scope that grants access to that entire API.|
+|permissions also identify the specific objects that can be accessed.|scopes typically only identify the set of API operations that can be performed.|
+
+### Introducing OAuth2
+- A user may not know which scopes are required for that application to function and so may create a token with too few scopes, or perhaps delegate all scopes just to get the application to work.
+- A better solution is for the application to request the scopes that it requires, and then the API can ask the user if they consent.
+- The tokens that an application uses to access an API are known as access tokens in OAuth2.
+
+![](.README/85b41ed2.png)
+
+- The authorization server (AS) authenticates the user and issues tokens to clients.
+- The user is known as the resource owner (RO), because it’s typically their resources (documents, photos, and so on) that the third-party app is trying to access.
+- The third-party app or service is known as the client.
+- The API that hosts the user’s resources is known as the resource server (RS).
+
+#### Types of clients
+
+|Public clients|Confidential clients|
+|--------------|--------------------|
+|applications that run entirely within a user’s own device, such as a mobile app or JavaScript client running in a browser. |run in a protected web server or other secure location that is not under a user’s direct control.|
+|The client is completely under the user’s control.|can have its own client credentials that it uses to authenticate to the authorization server.|
+
+#### Authorization grants
+- To obtain an access token, the client must first obtain consent from the user in the form of an authorization **grant** with appropriate scopes.
+- The client then presents this grant to the AS’s token endpoint to obtain an access token.
+- Resource Owner Password Credentials (ROPC)
+  * The user supplies their username and password to the client, which then sends them directly to the AS to obtain an access token with any scope it wants.
+  * It is not recommended for third-party clients because the user directly shares their password with the app.
+  * The AS will authenticate the RO using the supplied credentials and, if successful, will return an access token in a JSON response.
+  ```
+  curl -d 'grant_type=password&client_id=test
+  ➥ &scope=read_messages+post_message
+  ➥ &username=demo&password=changeit'
+  ➥ https://as.example.com:8443/oauth2/access_token
+  
+  
+  {
+            "access_token":"I4d9xuSQABWthy71it8UaRNM2JA",
+            "scope":"post_message read_messages",
+            "token_type":"Bearer",
+            "expires_in":3599
+  }
+  ```
+- Authorization Code grant 
+  * the client first uses a web browser to navigate to a dedicated authorization endpoint on the AS, indicating which scopes it requires.
+  * The AS then authenticates the user directly in the browser and asks for consent for the client access.
+  * If the user agrees then the AS generates an authorization code and gives it to the client to exchange for an access token at the token endpoint.
+- Client Credentials grant
+  * client to obtain an access token using its own credentials, with no user involved at all.
+  * This grant can be useful in some microservice communications patterns.
+- Device authorization grant
+  * Devices without any direct means of user interaction.
+  
+#### Discovering OAuth2 endpoints
+-  If your AS is hosted as **https://as.example.com:8443**  then a GET request to **https://as.example.com:8443/.well-known/oauth-authorization-server**
+   ```
+   {
+      "authorization_endpoint": "http://openam.example.com:8080/oauth2/authorize",
+      "token_endpoint": "http://openam.example.com:8080/oauth2/access_token",
+   }
+   ```
+   
+### The Authorization Code grant
+- By far the most useful and secure choice for most clients is the authorization code grant.
+
+![](.README/bf1d274b.png)
+
+![](.README/d612adba.png)
+
+- Finally, the client should generate a unique random state value for each request and store it locally (such as in a browser cookie).
+- When the AS redirects back to the client with the authorization code it will include the same state parameter, and the client should check that it matches the original one sent on the request.
+- This ensures that the code received by the client is the one it requested. 
+- The client can then exchange the authorization code for an access token by calling the token endpoint on the AS. It sends the authorization code in the body of a POST request, using the application/x-www-form-urlencoded encoding used for HTML forms.
+  * Indicate the authorization code grant type is being used by including grant_ type=authorization_code.
+  * Include the client ID in the client_id parameter or supply client credentials to identify the client.
+  * Include the redirect URI that was used in the original request in the redirect _uri parameter.
+  * Finally, include the authorization code as the value of the code parameter.
+  
+  ```
+  POST /token HTTP/1.1
+  Host: as.example.com
+  Content-Type: application/x-www-form-urlencoded
+  Authorization: Basic dGVzdDpwYXNzd29yZA==        **Supply client credentials for a confidential client.**
+  grant_type=authorization_code
+  &code=kdYfMS7H3sOO5y_sKhpdV6NFfik
+  &redirect_uri=https://client.example.net/callback
+  ```
+- If the client is confidential, then it must authenticate to the token endpoint when it exchanges the authorization code.
+- In the most common case, this is done by including the client ID and client secret as a username and password using HTTP Basic authentication, but alternative authentication methods are allowed, such as using a JWT or TLS client certificate.
+
+#### Redirect URIs for different types of clients
+- For a traditional web application, it’s simple to create a dedicated endpoint to use for the redirect URI to receive the authorization code.
+- For a single-page app, the redirect URI should be the URI of the app from which client-side JavaScript can then extract the authorization code and make a CORS request to the token endpoint.
+- For mobile applications, there are two primary options
+  * The application can register a private-use URI scheme with the mobile operating system, such as myapp://callback. When the AS redirects to myapp://callback?code=... in the system web browser, the operating system will launch the native app and pass it the callback URI. The native application can then extract the authorization code from this URI and call the token endpoint.
+    * A drawback with private-use URI schemes is that any app can register to handle any URI scheme, so a malicious application could register the same scheme as your legitimate client. 
+  * An alternative is to register a portion of the path on the web domain of the app producer. For example, your app could register with the operating system that it will handle all requests to https://example.com/app/callback. When the AS redirects to this HTTPS endpoint, the mobile operating system will launch the native app just as for a private-use URI scheme. 
+    * Android calls this an App Link (https://developer.android.com/training/app-links/)
+    * iOS they are known as Universal Links (https://developer.apple.com/ios/universal-links/).
+    
+#### Hardening code exchange with PKCE
+- Before the invention of claimed HTTPS redirect URIs, mobile applications using private-use URI schemes were vulnerable to code interception by a malicious app registering the same URI scheme.
+- To protect against this attack, the OAuth working group developed the PKCE standard (Proof Key for Code Exchange), pronounced “pixy”.
+##### Why PKCE ?
+- For example, an attacker may be able to obtain a genuine authorization code by interacting with a legitimate client and then using an XSS attack against a victim to replace their authorization code with the attacker’s. Such an attack would be quite difficult to pull off but is theoretically possible. It’s therefore recommended that all types of clients use PKCE to strengthen the authorization code flow.
+##### How PKCE works ?
+- Before the client redirects the user to the authorization endpoint, it generates another random value, known as the **PKCE code verifier**.
+- The client stores the code verifier locally, alongside the state parameter.
+- Rather than sending this value directly to the AS, the client first hashes it using the SHA-256 cryptographic hash function to create a code challenge.
+- The client then adds the code challenge as another query parameter when redirecting to the authorization endpoint.
+
+![](.README/5825cb98.png)
+
+- Later, when the client exchanges the authorization code at the token endpoint, it sends the original (unhashed) code verifier in the request.
+- The AS will check that the SHA-256 hash of the code verifier matches the code challenge that it received in the authorization request.
+- Authorization servers that don’t support PKCE should ignore the additional query parameters, because this is required by the OAuth2 standard.
+
+#### Refresh tokens
+- The refresh token is returned as another field in the JSON response from the token endpoint, as in the following example:
+```
+$ curl -d 'grant_type=password
+➥ &scope=read_messages+post_message
+➥ &username=demo&password=changeit'
+➥ -u test:password
+➥ https://as.example.com:8443/oauth2/access_token
+
+{
+  "access_token":"B9KbdZYwajmgVxr65SzL-z2Dt-4",
+  "refresh_token":"sBac5bgCLCjWmtjQ8Weji2mCrbI",
+  "scope":"post_message read_messages",
+  "token_type":"Bearer","expires_in":3599
+}
+```
+
+### Validating an access token
+#### Token introspection
+- To validate an access token using token introspection, you simply make a POST request to the introspection endpoint of the AS, passing in the access token as a parameter.
+
+```
+var form = "token=" + URLEncoder.encode(tokenId, UTF_8) + "&token_type_hint=access_token";
+
+var httpRequest = HttpRequest.newBuilder()
+            .uri(introspectionEndpoint)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Authorization", authorization)
+            .POST(BodyPublishers.ofString(form))
+            .build();            
+```
+
+#### JWT access tokens
+- Though token introspection solves the problem of how the API can determine if an access token is valid and the scope associated with that token, it has a downside: the API must make a call to the AS every time it needs to validate a token. 
+- An alternative is to use a self-contained token format such as JWTs.
+- To validate a JWT-based access token, the API needs to first authenticate the JWT using a cryptographic key. 
+
+![](.README/291adbd3.png)
+
+### OpenID Connect
+- A standard way to retrieve identity information about a user, such as their name, email address, postal address, and telephone number.
+  * The client can access a UserInfo endpoint to retrieve identity claims as JSON using an OAuth2 access token with standard OIDC scopes.
+- OAuth2 is primarily a delegated access protocol, whereas OIDC provides a full authentication protocol. If the client needs to positively authenticate a user, then OIDC should be used. 
+- Extensions for session management and logout, allowing clients to be notified when a user logs out of their session at the AS, enabling the user to log out of all clients at once (known as single logout). 
+
+> In OIDC, the AS and RS are combined into a single entity known as an OpenID Provider (OP). The client is known as a Relying Party (RP).
+
+#### ID tokens
+- First, the client needs to call the authorization endpoint to get an authorization code.
+- Then the client exchanges the code for an access token.
+- Finally, the client can use the access token to call the UserInfo endpoint to retrieve the identity claims for the user.
+
+![](.README/018c7b30.png)
+
+- OIDC provides a way to return some of the identity and authentication claims about a user as a new type of token known as an ID token, which is a signed and optionally encrypted JWT.
+- An ID token is a signed and optionally encrypted JWT that contains identity and authentication claims about a user.
+
+- To validate an ID token, the client should first process the token as a JWT, decrypting it if necessary and verifying the signature.
+
+#### Hardening OIDC
+- FWD
+#### Passing an ID token to an API
+- FWD
