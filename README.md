@@ -939,3 +939,150 @@ var httpRequest = HttpRequest.newBuilder()
 - FWD
 #### Passing an ID token to an API
 - FWD
+
+## Identity-based access control
+- Alternative ways of organizing permissions in the **identity-based access control** model.
+- **Identity-based access control (IBAC)** determines what you can do based on who you are. 
+- The user performing an API request is first authenticated and then a check is performed to see if that user is authorized to perform the requested action.
+
+### Users and groups
+- One of the most common approaches to simplifying permission management is to collect related users into groups.
+
+![](.README/715e14ba.png)
+
+- There is a many-to-many relationship between users and groups: a group can have many members, and a user can belong to many groups.
+- If the membership of a group is defined in terms of subjects (which may be either users or other groups), then it is also possible to have groups be members of other groups, creating a hierarchical structure.
+- The advantage of groups is that you can now assign permissions to groups and be sure that all members of that group have consistent permissions. 
+
+```
+CREATE TABLE group_members(
+    group_id VARCHAR(30) NOT NULL,
+user_id VARCHAR(30) NOT NULL REFERENCES users(user_id)); CREATE INDEX group_member_user_idx ON group_members(user_id);
+
+CREATE TABLE permissions(
+    space_id INT NOT NULL REFERENCES spaces(space_id),
+    user_or_group_id VARCHAR(30) NOT NULL,
+    perms VARCHAR(3) NOT NULL);
+```
+
+#### LDAP groups
+- In many large organizations, including most companies, users are managed centrally in an LDAP (Lightweight Directory Access Protocol) directory. 
+- LDAP is designed for storing user information and has built-in support for groups.
+- The LDAP standard defines the following two forms of groups:
+  * ***Static groups*** are defined using the **groupOfNames** or **groupOfUniqueNames** object classes, which explicitly list the members of the group using the **member** or **uniqueMember** attributes. 
+    * The difference between the two is that **groupOfUnique-Names** forbids the same member being listed twice.
+    * To find which static groups a user is a member of in LDAP, you must perform a search against the directory for all groups that have that user’s distinguished name as a value of their member attribute.
+  * ***Dynamic groups*** are defined using the **groupOfURLs** object class, where the membership of the group is given by a collection of LDAP URLs that define search queries against the directory.
+  * ***Virtual static groups***, which look like static groups but query a dynamic group to determine the membership.
+  
+- To make looking up the groups a user belongs to more efficient, many directory servers support a virtual attribute on the user entry itself that lists the groups that user is a member of. 
+- The directory server automatically updates this attribute as the user is added to and removed from groups (both static and dynamic). 
+- Because this attribute is nonstandard, it can have different names but is often called **isMemberOf** or something similar.   
+
+### Role-based access control
+- Groups do not fully solve the difficulties of managing permissions for a complex API.
+- To work out who has access to what, you still often need to examine the permissions for all users as well as the groups they belong to.
+- even when groups are a good fit for an API, there may be large numbers of fine-grained permissions assigned to each group, making it difficult to review the permissions.
+- Permissions are assigned to **roles**, and then **roles** are assigned to users.
+
+![](.README/0e115658.png)
+
+|Role|Group|
+|----|-----|
+|organize permissions|organize users|
+|specific to a particular application or API|assigned centrally|
+|every API may have an admin role|set of users that are administrators may differ from API to API.|
+|RBAC systems typically don’t allow permissions to be assigned to individual users|allow permissions to be assigned to individual users|
+
+#### Mapping roles to permissions
+- First Approach
+  * This is the approach taken in Java Enterprise Edition (Java EE) and the JAX-RS framework, where methods can be annotated with the **@RolesAllowed** annotation to describe which roles can call that method via an API.
+
+![](.README/8225616f.png)
+
+- Second Approach
+  * to define an explicit mapping from roles to permissions.
+  
+```
+CREATE TABLE role_permissions(
+    role_id VARCHAR(30) NOT NULL PRIMARY KEY,
+    perms VARCHAR(3) NOT NULL
+);
+
+INSERT INTO role_permissions(role_id, perms)
+    VALUES ('owner', 'rwd'),
+           ('moderator', 'rd'),
+           ('member', 'rw'),
+           ('observer', 'r');
+           
+GRANT SELECT ON role_permissions TO natter_api_user;
+```  
+
+#### Static roles
+- When users, groups, or roles are confined to a subset of your application, this is known as a **security domain** or **realm**.
+
+```
+CREATE TABLE user_roles(
+    space_id INT NOT NULL REFERENCES spaces(space_id),
+    user_id VARCHAR(30) NOT NULL REFERENCES users(user_id),
+    role_id VARCHAR(30) NOT NULL REFERENCES role_permissions(role_id), PRIMARY KEY (space_id, user_id)
+);
+
+GRANT SELECT, INSERT, DELETE ON user_roles TO natter_api_user;
+```
+
+#### Dynamic roles
+- A call center worker might be granted a role that allows them access to customer records so that they can respond to customer support queries. 
+- To reduce the risk of misuse, the system could be configured to grant the worker this role only during their contracted working hours, perhaps based on their shift times. Outside of these times the user would not be granted the role, and so would be denied access to customer records if they tried to access them.
+
+### Attribute-based access control
+- To handle these kinds of dynamic access control decisions, an alternative to RBAC has been developed known as **ABAC: attribute-based access control**.
+- ABAC, access control decisions are made dynamically for each API request using collections of attributes grouped into four categories:
+  * **Attributes about the subject**
+    * username
+    * groups they belong to
+    * how they were authenticated
+    * when they last authenticated
+  * **Attributes about the resource**
+    * URI of the resource
+    * security label (TOP SECRET, for example)
+  * **Attributes about the action**
+    * such as the HTTP method.
+  * **Attributes about the environment**  
+    * the local time of day
+    * the location of the user performing the action.
+    
+![](.README/1980cf55.png)
+
+#### Combining decisions
+- FWD
+
+#### Implementing ABAC decisions
+- Implement a simple ABAC decision engine using the Drools (https://drools.org) business rules engine from Red Hat.
+- Drools can be used to write all kinds of business rules and provides a convenient syntax for authoring access control rules.
+
+#### Policy agents and API gateways
+- Specialized components have been developed that implement sophisticated policy enforcement.
+- These components are typically implemented either as a policy agent that plugs into an existing application server, web server, or reverse proxy, or else as standalone gateways that intercept requests at the HTTP layer.
+
+![](.README/39821dd2.png)
+
+- **The Open Policy Agent** (OPA, https://www.openpolicyagent.org) implements a policy engine using a DSL designed to make expressing access control decisions easy. 
+- It can be integrated into an existing infrastructure either using its REST API or as a Go library, and integrations have been written for various reverse proxies and gateways to add policy enforcement.
+
+#### Distributed policy enforcement and XACML
+- Rather than combining all the logic of enforcing policies into the agent itself, another approach is to centralize the definition of policies in a separate server, which provides a REST API for policy agents to connect to and evaluate policy decisions.
+- This approach is most closely associated with **XACML, the eXtensible Access-Control Markup Language** (see http://mng.bz/Qx2w), which defines an XML-based language for policies with a rich set of functions for matching attributes and combining policy decisions.
+- The core components of the XACML reference architecture
+  * **A Policy Enforcement Point (PEP)**
+    - a policy agent to intercept requests to an API and reject any requests that are denied by policy.
+  * The PEP talks to a **Policy Decision Point (PDP)**
+    - determine if a request should be allowed.
+  * **A Policy Information Point (PIP)**
+    - responsible for retrieving and caching values of relevant attributes from different data sources.
+  * **A Policy Administration Point (PAP)**
+    - provides an interface for administrators to define and manage policies.
+    
+![](.README/734c0371.png)
+
+    
