@@ -1352,3 +1352,25 @@ $ linkerd tap ns/natter-api
 req id=4:2 proxy=in src=172.17.0.16:43358 dst=172.17.0.14:4567 ➥ tls=true :method=POST :authority=natter-api-service.natter- ➥ api.svc.cluster.local:4567 :path=/users
 rsp id=4:2 proxy=in src=172.17.0.16:43358 dst=172.17.0.14:4567 ➥ tls=true :status=201 latency=322728μs
 ```
+
+
+## Securing service-to-service APIs
+### Service API calls in response to user requests
+- When a service makes an API call to another service in response to a user request, but uses its own credentials rather than the user’s, there is an opportunity for **confused deputy attacks**.
+- Avoid **confused deputy attacks** in service-to-service calls that are carried out in response to user requests by ensuring that access control decisions made in backend services include the context of the original request.
+- Service-to-service authentication is used to establish that the request comes from a trusted source (the frontend service), and permission to perform the action is determined based on the identity of the user indicated in the request.
+
+#### The phantom token pattern
+
+![](.README/bcea6cc5.png)
+
+- In the **phantom token pattern**, a long-lived opaque access token is validated and then replaced with a short-lived signed JWT at an API gateway. Microservices behind the gateway can examine the JWT without needing to perform an expensive introspection request.
+- The advantage of the phantom token pattern
+  * microservices behind the gateway don’t need to perform token introspection calls themselves.
+  * Because the JWT is short-lived, typically with an expiry time measured in seconds or minutes at most, there is no need for those microservices to check for revocation.
+  * The API gateway can exam-ine the request and reduce the scope and audience of the JWT, limiting the damage that would be done if any backend microservice has been compromised.
+  
+```
+ In principle, if the gateway needs to call five different microservices to satisfy a request, it can create five separate JWTs with scope and audience appropriate to each request. 
+ This ensures the principle of least privilege is respected and reduces the risk if any one of those services is compromised, but is rarely done due to the extra overhead of creating new JWTs, especially if public key signatures are used.
+```
