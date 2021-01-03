@@ -1085,4 +1085,105 @@ GRANT SELECT, INSERT, DELETE ON user_roles TO natter_api_user;
     
 ![](.README/734c0371.png)
 
-    
+## Capability-based security and macaroons
+
+- If a Natter user wishes to share a message that they wrote with a wider audience, they would like to just copy a link to it. 
+- But this won’t work unless the users they are sharing the link with are also members of the Natter social space it was posted to, because they won’t be granted access. 
+- The only way to grant those users access to that message is to either make them members of the space, which violates the principle of least authority (because they now have access to all the messages in that space), or else to copy and paste the whole message into a different system.
+- People naturally share resources and delegate access to others to achieve their goals, so an API security solution should make this simple and secure; otherwise, your users will find insecure ways to do it anyway.
+
+### Capability-based security
+- A capability is an unforgeable reference to an object or resource together with a set of permissions to access that resource.
+
+|identity-based system|capability-based system|
+|---------------------|-----------------------|
+|anybody can attempt to access a resource, but they might be denied access depending on who they are.|it is impossible to send a request to a resource if you do not have a capability to access it.|
+| |provide fine-grained access to individual resources, and often support POLA more naturally than identity-based systems.|
+| |capabilities are hard to control due to easy sharing and the apparent difficulty of revocation.|
+
+### Capabilities and REST
+> When the permission to perform an action is automatically granted to all requests that originate from a given environment this is known as ambient authority. Examples of ambient authority include session cookies and allowing access based on the IP address a request comes from. Ambient authority increases the risks of confused deputy attacks and should be avoided whenever possible.
+
+#### Capabilities as URIs
+- Capability URI (or capability URL) is a URI that both identifies a resource and conveys a set of permissions to access that resource.
+- Typically, a capability URI encodes an unguessable token into some part of the URI structure.
+
+```
+capability URI = normal URI + security token
+```
+
+![](.README/5d6403fe.png)
+
+#### HATEOAS
+- HATEOAS, or hypertext as the engine of application state, is a central principle of REST API design that states that a client should not need to have specific knowledge of how to construct URIs to access your API. 
+- Instead, the server should provide this information in the form of hyperlinks and form templates.
+- The aim of HATEOAS is to reduce coupling between the client and server that would otherwise prevent the server from evolving its API over time because it might break assumptions made by clients.
+
+```
+curl -X POST -H 'Content-Type: application/json' \
+    -u demo:password \
+    -d '{"author":"demo","message":"Hello!"}' \
+    'https://localhost:4567/spaces/1/messages?access_token=
+➥ u9wu69dl5L8AT9FNe03TM-s4H8M'    
+```
+
+### Macaroons: Tokens with caveats
+- A **macaroon** is a type of cryptographic token that can be used to represent capabilities and other authorization grants. 
+- Anybody can append new **caveats** to a macaroon that restrict how it can be used.
+
+- the user could append the following caveats to their capability to create a new capability that allows only read access to messages since lunch time yesterday:
+
+```
+method = GET
+since >= 2019-10-12T12:00:00Z
+```
+
+- The other benefit of macaroons is that anyone can append a caveat to a macaroon using a macaroon library, without needing to call an API endpoint or have access to any secret keys. Once the caveat has been added it can’t be removed.
+- To allow anybody to append caveats to a macaroon, even if they don’t have the key, macaroons use an interesting property of HMAC:
+  * the authentication tag output from HMAC can itself be used as a key to sign a new message with HMAC.
+  * To append a caveat to a **macaroon**, you use the old authentication tag as the key to compute a new HMAC-SHA256 tag over the caveat.
+  * When the macaroon is presented back to the API, it can use the original HMAC key to reconstruct the original tag and all the caveat tags and check if it comes up with the same signature value at the end of the chain of caveats.  
+
+![](.README/f4a98781.png)
+
+- There are two broad categories of caveats supported by macaroon libraries:
+  * First-party caveats
+    * restrictions that can be easily verified by the API at the point of use, such as restricting the times of day at which the token can be used.
+  * Third-party caveats
+    * restrictions which require the client to obtain a proof from a third-party service, such as proof that the user is an employee of a particular company or that they are over.
+
+#### Contextual caveats
+- A contextual caveat is a caveat that is added by a client just before use.
+- Contextual caveats allow the authority of a token to be restricted before sending it over an insecure channel or to an untrusted API, limiting the damage that might occur if the token is stolen.
+
+> A client that is about to send a macaroon to an API over an untrustworthy communication channel can attach a first-party caveat limiting it to only be valid for HTTP PUT requests to that specific URI for the next 5 seconds. That way, if the macaroon is sto- len, then the damage is limited because the attacker can only use the token in very restricted circumstances. Because the client can keep a copy of the original unrestricted macaroon, their own ability to use the token is not limited in the same way.
+
+- Macaroons can be used with any token-based authentication and even OAuth2 access tokens if your authorization server supports them.
+
+#### A macaroon token store
+- Open the pom.xml file in your editor and add the following lines to the dependencies section:
+
+```
+<dependency>
+      <groupId>com.github.nitram509</groupId>
+      <artifactId>jmacaroons</artifactId>
+      <version>0.4.1</version>
+</dependency> 
+```
+
+- Like the **HmacTokenStore**, the macaroon token store only provides authentication of tokens and not confidentiality unless the underlying store already provides that.
+- you can create two static factory methods that return a correctly typed store depending on the underlying token store:
+  * If the underlying token store is a **ConfidentialTokenStore**, then it returns a **SecureTokenStore** because the resulting store provides both confidentiality and authenticity of tokens.
+    ```
+    public static SecureTokenStore wrap(ConfidentialTokenStore tokenStore, Key macKey) {
+        return new MacaroonTokenStore(tokenStore, macKey);
+    }
+    ```
+  * Otherwise, it returns an **AuthenticatedTokenStore** to make clear that confidentiality is not guaranteed.
+    ```
+    public static AuthenticatedTokenStore wrap(TokenStore tokenStore, Key macKey) {
+        return new MacaroonTokenStore(tokenStore, macKey);
+    }
+    ```
+
+#### First-party caveats    
