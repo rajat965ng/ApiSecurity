@@ -1190,3 +1190,165 @@ since >= 2019-10-12T12:00:00Z
 - FWD  
 #### Third-party caveats
 - FWD
+
+
+## Microservice APIs in Kubernetes
+
+- Securely deploy microservice APIs as Docker containers on Kubernetes, including how to harden containers and the cluster network to reduce the risk of compromise, and how to run TLS at scale using Linkerd (https://linkerd.io) to secure microservice API communications.
+
+![](.README/917c3737.png)
+
+### Microservice APIs on Kubernetes
+
+- ![](.README/8b645d93.png)
+
+- Separating potentially risky operations into their own environments is known as privilege separation.
+
+- Sample Docker file for java application
+  * Using a minimal base image such as the Alpine distribution or Google’s distroless images reduces the attack surface of potentially vulnerable software and limits further attacks that can be carried out if the container is ever compromised.
+  * Ensure the process runs as a non-root user and group.
+    * The root user always has a UID of 0. Normal users usually have UIDs starting at 500 or 1000.
+    
+```
+FROM gcr.io/distroless/java:11
+WORKDIR /opt
+COPY --from=build-env /tmp/h2/bin /opt/h2
+
+USER 1000:1000
+EXPOSE 9092
+
+ENTRYPOINT ["java", "-Djava.security.egd=file:/dev/urandom", \
+"-cp", "/opt/h2/h2-1.4.197.jar", \ "org.h2.tools.Server", "-tcp", "-tcpAllowOthers"]
+```
+
+- A set of standard kubernetes security attributes in the **securityContext** section for both the pod and for individual containers, as shown in the listing.
+  * **runAsNonRoot: true**
+    * ensures that the container is not accidentally run as the root user. 
+    * The root user inside a container is the root user on the host OS and can sometimes escape from the container.
+  * **allowPrivilegeEscalation: false**
+    * ensures that no process run inside the container can have more privileges than the initial user. 
+    * This prevents the container executing files marked with set-UID attributes that run as a different user, such as root.
+  * **readOnlyRootFileSystem: true**
+    * makes the entire filesystem inside the container read-only, preventing an attacker from altering any system files. 
+    * If your container needs to write files, you can mount a separate persistent storage volume. 
+  * **capabilities:drop:-all**
+    * removes all Linux capabilities assigned to the container. 
+    * This ensures that if an attacker does gain root access, they are severely limited in what they can do.  
+    
+#### Preventing SSRF attacks
+- The link-preview (reverse proxy) service currently has a large security flaw, because it allows anybody to submit a message with a link that will then be loaded from inside the Kubernetes network.
+- This opens the application up to a **server-side request forgery (SSRF) attack**, where an attacker crafts a link that refers to an internal service that isn’t accessible from outside the network.
+
+![](.README/13fb5e5b.png)
+
+- The best defense against SSRF attacks is to require authentication for access to any internal services, regardless of whether the request originated from an internal network: an approach known as **zero trust networking**.
+- A **zero trust network** architecture is one in which requests to services are not trusted purely because they come from an internal network.
+
+> The term originated with Forrester Research and was popularized by Google’s BeyondCorp enterprise architecture (https://cloud.google.com/beyondcorp/). 
+
+> The term has now become a marketing buzzword, with many products promising a zero-trust approach, but the core idea is still valuable.
+
+- This validation can be done in two ways:
+  * You can **check** the URLs against a set of allowed hostnames, domain names, or (ideally) strictly match the entire URL. Only URLs that match the allowlist are allowed. This approach is the most secure but is not always feasible.
+  * You can **block** URLs that are likely to be internal services that should be protected. This is less secure than allowlisting for several reasons.
+    * First, you may forget to blocklist some services.
+    * Second, new services may be added later without the blocklist being updated.
+
+### Securing microservice communications
+#### Using a service mesh for TLS
+- There are a variety of tools available to help run a PKI for you. 
+  * Cloudflare’s PKI toolkit (https://cfssl.org)
+  * Hashicorp Vault (http:// mng.bz/nzrg)
+
+- These general-purpose tools still require a significant amount of effort to integrate into a Kubernetes environment.
+- Alternative that is becoming more popular
+  * service mesh such as Istio (https://istio.io)
+  * Linkerd (https://linkerd.io)
+
+- Linkerd has fewer features than Istio, but is much simpler to deploy and configure  
+- To enable a service mesh, you need to install the service mesh **control plane** components such as the CA into your cluster.
+
+- The **control plane** of a service mesh is the set of components responsible for configuring, managing, and monitoring the proxies.
+- The proxies themselves and the services they protect are known as the **data plane**.
+
+
+##### INSTALLING LINKERD
+- brew install linkerd
+
+- Run pre-installation checks to ensure that your Kubernetes cluster is suitable for running the service mesh by running:
+  * linkerd check --pre
+
+- Install the control plane components by running the following command:
+  * linkerd install | kubectl apply -f -
+  
+  ```
+  apiVersion: v1
+  kind: Namespace
+  metadata:
+    name: ms-api
+    labels:
+      name: ms-api
+    annotations:
+      linkerd.io/inject: enabled  
+  ```
+- Finally, run *linkerd check* again (without the --pre argument) to check the progress of the installation and see when all the components are up and running.
+
+##### Mutual TLS
+- Linkerd and most other service meshes don’t just supply normal TLS server certificates, but also client certificates that are used to authenticate the client to the server.
+- When both sides of a connection authenticate using certificates this is known as mutual TLS, or mutually authenticated TLS, often abbreviated mTLS.
+- mTLS is not by itself any more secure than normal TLS. There are no attacks against TLS at the transport layer that are prevented by using mTLS.
+- *The purpose of a server certificate is to prevent the client connecting to a fake server, and it does this by authenticating the hostname of the server.*
+
+### Securing incoming requests
+- To secure requests into the cluster, you can enable an **ingress controller** that will receive all requests arriving from external sources.
+- An ingress controller is a reverse proxy or load balancer, and can be configured to perform TLS termination, rate-limiting, audit logging, and other basic security controls.
+
+![](.README/b26ccbe1.png)
+
+- To allow Linkerd to automatically apply mTLS to connections between the ingress controller and the backend services, you need to rewrite the Host header from the external value (such as api.natter.local) to the internal name used by your service. This can be achieved by adding the **nginx.ingress.kubernetes.io/upstream-vhost** annotation.
+
+```
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: api-ingress
+  namespace: natter-api
+  annotations:
+    nginx.ingress.kubernetes.io/upstream-vhost: "$service_name.$namespace.svc.cluster.local:$service_port"
+spec: 
+  tls:
+    - hosts:
+        - api.natter.local
+      secretName: natter-tls
+  rules:
+    - host: api.natter.local
+      http:
+        paths:
+          - backend:
+              serviceName: natter-api-service
+              servicePort: 4567    
+```
+
+>  For development, you can create a certificate with the mkcert utility
+
+> mkcert api.natter.local
+
+- This will spit out a certificate and private key in the current directory as two files with the .pem extension. 
+- PEM stands for Privacy Enhanced Mail and is a common file format for keys and certificates. 
+
+```
+kubectl create secret tls natter-tls -n natter-api \
+--key=api.natter.local-key.pem --cert=api.natter.local.pem
+```
+
+- This will create a TLS secret with the name *natter-tls* in the *natter-api* namespace with the given key and certificate files. 
+- The ingress controller will be able to find this secret because of the *secretName* configuration option in the ingress configuration file.
+
+- If you check the status of requests using Linkerd’s tap utility, you’ll see that requests from the ingress controller are protected with mTLS:
+
+```
+$ linkerd tap ns/natter-api
+
+req id=4:2 proxy=in src=172.17.0.16:43358 dst=172.17.0.14:4567 ➥ tls=true :method=POST :authority=natter-api-service.natter- ➥ api.svc.cluster.local:4567 :path=/users
+rsp id=4:2 proxy=in src=172.17.0.16:43358 dst=172.17.0.14:4567 ➥ tls=true :status=201 latency=322728μs
+```
