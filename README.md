@@ -1186,4 +1186,7 @@ since >= 2019-10-12T12:00:00Z
     }
     ```
 
-#### First-party caveats    
+#### First-party caveats
+- FWD  
+#### Third-party caveats
+- FWD
